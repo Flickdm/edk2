@@ -1,0 +1,26 @@
+CVE_2018_3614:
+    commit_titles:
+        - # Upstream Patch from Tianocore Edk2
+            - "MdePkg/SmmMemLib: Check for untested memory in GCD"
+            - "MdePkg/SmmMemLib: Check EFI_MEMORY_RO in UEFI mem attrib table."
+    cve:
+        CVE-2018-3614
+    date_reported:
+        2017-10-25
+    description: 
+        An untested memory might not be covered by the SMM page protection.
+    notes:
+    files_impacted:
+        - # Upstream Patch from Tianocore Edk2
+            - MdePkg/Library/SmmMemLib/SmmMemLib.c
+            - MdePkg/Library/SmmMemLib/SmmMemLib.inf
+    links:
+        - https://bugzilla.tianocore.org/show_bug.cgi?id=751
+        - https://nvd.nist.gov/vuln/detail/CVE-2018-3614
+        - https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2018-3614
+        - https://github.com/tianocore/edk2/compare/233ffa90ccd852a8c6a478eb0426731d64598316..4a723ed258367471eac8b4ae32558f09ef65672e # The diff on bugzilla is incorrect, invert it
+        - https://github.com/tianocore/edk2/commit/6809627276640a0c57b3f3c7cf0c5eb469f019e6 # MdePkg/SmmMemLib: Check EFI_MEMORY_RO in UEFI mem attrib table.
+        - https://github.com/tianocore/edk2/commit/233ffa90ccd852a8c6a478eb0426731d64598316 # MdePkg/SmmMemLib: Check for untested memory in GCD
+    other_packages_impacted:
+        UefiCpuPkg
+        MdeModulePkg
