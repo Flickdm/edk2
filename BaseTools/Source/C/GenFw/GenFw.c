@@ -86,6 +86,7 @@ UINT32 mImageSize = 0;
 UINT32 mOutImageType = FW_DUMMY_IMAGE;
 BOOLEAN mIsConvertXip = FALSE;
 BOOLEAN mExportFlag = FALSE;
+BOOLEAN mIncludeDebugInfo = FALSE;
 
 STATIC
 EFI_STATUS
@@ -281,6 +282,9 @@ Returns:
                         write export table into PE-COFF.\n\
                         This option can be used together with -e.\n\
                         It doesn't work for other options.\n");
+  fprintf (stdout, "  --debugInfo           Writes the DLL name(s) used to build the\n\
+                        image into the Debug Directory\n\
+                        ");
   fprintf (stdout, "  -v, --verbose         Turn on verbose output with informational messages.\n");
   fprintf (stdout, "  -q, --quiet           Disable all messages except key message and fatal error\n");
   fprintf (stdout, "  -d, --debug level     Enable debug messages, at input debug level.\n");
@@ -1437,6 +1441,14 @@ Returns:
       argv ++;
       continue;
     }
+
+    if (stricmp (argv[0], "--debuginfo") == 0) {
+      mIncludeDebugInfo = TRUE;
+      argc --;
+      argv ++;
+      continue;
+    }
+
 
     if (stricmp (argv[0], "--prm") == 0) {
       if (stricmp (ModuleType, "DXE_RUNTIME_DRIVER") != 0 ){
