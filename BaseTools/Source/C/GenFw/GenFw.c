@@ -282,7 +282,7 @@ Returns:
                         write export table into PE-COFF.\n\
                         This option can be used together with -e.\n\
                         It doesn't work for other options.\n");
-  fprintf (stdout, "  --debugInfo           Writes the DLL name(s) used to build the\n\
+  fprintf (stdout, "  --debuginfo           Writes the DLL name(s) used to build the\n\
                         image into the Debug Directory\n\
                         ");
   fprintf (stdout, "  -v, --verbose         Turn on verbose output with informational messages.\n");
