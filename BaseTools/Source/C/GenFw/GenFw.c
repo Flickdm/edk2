@@ -39,6 +39,7 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
 #include "EfiUtilityMsgs.h"
 
 #include "GenFw.h"
+#include "ElfConvert.h"
 
 //
 // Version of this utility
@@ -285,6 +286,10 @@ Returns:
                         input action option will override the previous one.\n");
   fprintf (stdout, "  --prm                 Scan symbol section from ELF image and \n\
                         write export table into PE-COFF.\n\
+                        This option can be used together with -e.\n\
+                        It doesn't work for other options.\n");
+  fprintf (stdout, "  --export-symbol=NAME  Export the specified symbol to PE-COFF export table.\n\
+                        Can be specified multiple times for multiple symbols.\n\
                         This option can be used together with -e.\n\
                         It doesn't work for other options.\n");
   fprintf (stdout, "  --nonxcompat          Do not set the IMAGE_DLLCHARACTERISTICS_NX_COMPAT bit \n\
@@ -1564,6 +1569,18 @@ Returns:
       if (!mExportFlag) {
         mExportFlag = TRUE;
       }
+      argc --;
+      argv ++;
+      continue;
+    }
+
+    if (strnicmp (argv[0], "--export-symbol=", 16) == 0) {
+      if (strlen(argv[0] + 16) == 0) {
+        Error (NULL, 0, 1003, "Invalid option value", "--export-symbol requires a symbol name");
+        goto Finish;
+      }
+      SetExplicitExportSymbol (argv[0] + 16);
+      mExportFlag = TRUE;
       argc --;
       argv ++;
       continue;

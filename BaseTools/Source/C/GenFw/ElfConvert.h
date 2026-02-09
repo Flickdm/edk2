@@ -119,4 +119,13 @@ CreateSectionHeader (
   UINT32      Flags
   );
 
+//
+// Function to set explicit export symbols
+//
+VOID
+SetExplicitExportSymbol (
+  CONST CHAR8 *SymbolName
+  );
+
+
 #endif

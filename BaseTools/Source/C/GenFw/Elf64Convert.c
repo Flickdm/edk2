@@ -146,6 +146,26 @@ STATIC UINT32      mExportSize;
 STATIC UINT32      mExportRVA[PRM_MODULE_EXPORT_SYMBOL_NUM];
 STATIC UINT32      mExportSymNum;
 STATIC CHAR8       mExportSymName[PRM_MODULE_EXPORT_SYMBOL_NUM][PRM_HANDLER_NAME_MAXIMUM_LENGTH];
+STATIC BOOLEAN     mExplicitExportMode = FALSE;
+
+//
+// Set an explicit export symbol (called from GenFw.c command-line parsing)
+//
+VOID
+SetExplicitExportSymbol (
+  CONST CHAR8 *SymbolName
+  )
+{
+  if (mExportSymNum >= PRM_MODULE_EXPORT_SYMBOL_NUM) {
+    Error (NULL, 0, 3000, "Invalid", "Too many --export-symbol options (max %d)", PRM_MODULE_EXPORT_SYMBOL_NUM);
+    return;
+  }
+  strncpy(mExportSymName[mExportSymNum], SymbolName, PRM_HANDLER_NAME_MAXIMUM_LENGTH - 1);
+  mExportSymName[mExportSymNum][PRM_HANDLER_NAME_MAXIMUM_LENGTH - 1] = '\0';
+  mExportRVA[mExportSymNum] = 0;
+  mExportSymNum++;
+  mExplicitExportMode = TRUE;
+}
 
 //
 // Initialization Function
@@ -188,7 +208,7 @@ InitializeElf64 (
 
   if (mExportFlag) {
     if ((mEhdr->e_machine != EM_X86_64) && (mEhdr->e_machine != EM_AARCH64)) {
-      Error (NULL, 0, 3000, "Unsupported", "--prm option currently only supports X64 and AArch64 archs.");
+      Error (NULL, 0, 3000, "Unsupported", "--prm/--export-symbol option currently only supports X64 and AArch64 archs.");
       return FALSE;
     }
   }
@@ -1022,6 +1042,7 @@ ScanSections64 (
   //
   if (mExportFlag) {
     UINT32      SymIndex;
+    UINT32      ExpIndex;
     Elf_Sym     *Sym;
     UINT64      SymNum;
     const UINT8 *SymName;
@@ -1043,7 +1064,34 @@ ScanSections64 (
       SymNum = (shdr->sh_size) / (shdr->sh_entsize);
 
       //
-      // First Get PrmModuleExportDescriptor
+      // If using PRM mechanism, first get PrmModuleExportDescriptor
+      //
+      if (!mExplicitExportMode) {
+        for (SymIndex = 0; SymIndex < SymNum; SymIndex++) {
+          Sym = (Elf_Sym *)(Symtab + SymIndex * shdr->sh_entsize);
+          SymName = GetSymName(Sym);
+          if (SymName == NULL) {
+              continue;
+          }
+
+          if (strcmp((CHAR8*)SymName, PRM_MODULE_EXPORT_DESCRIPTOR_NAME) == 0) {
+            //
+            // Find PrmHandler Number and Name
+            //
+            FindPrmHandler(Sym->st_value);
+
+            snprintf(mExportSymName[mExportSymNum], PRM_HANDLER_NAME_MAXIMUM_LENGTH, "%s", (CHAR8*)SymName);
+
+            mExportRVA[mExportSymNum] = (UINT32)(Sym->st_value);
+            mExportSize += 2 * EFI_IMAGE_EXPORT_ADDR_SIZE + EFI_IMAGE_EXPORT_ORDINAL_SIZE + strlen((CHAR8 *)SymName) + 1;
+            mExportSymNum ++;
+            break;
+          }
+        }
+      }
+
+      //
+      // Find RVAs for all export symbols (works for both PRM and explicit modes)
       //
       for (SymIndex = 0; SymIndex < SymNum; SymIndex++) {
         Sym = (Elf_Sym *)(Symtab + SymIndex * shdr->sh_entsize);
@@ -1052,37 +1100,16 @@ ScanSections64 (
             continue;
         }
 
-        if (strcmp((CHAR8*)SymName, PRM_MODULE_EXPORT_DESCRIPTOR_NAME) == 0) {
-          //
-          // Find PrmHandler Number and Name
-          //
-          FindPrmHandler(Sym->st_value);
-
-          snprintf(mExportSymName[mExportSymNum], PRM_HANDLER_NAME_MAXIMUM_LENGTH, "%s", (CHAR8*)SymName);
-
-          mExportRVA[mExportSymNum] = (UINT32)(Sym->st_value);
-          mExportSize += 2 * EFI_IMAGE_EXPORT_ADDR_SIZE + EFI_IMAGE_EXPORT_ORDINAL_SIZE + strlen((CHAR8 *)SymName) + 1;
-          mExportSymNum ++;
-          break;
-        }
-      }
-
-      //
-      // Second Get PrmHandler
-      //
-      if (mExportSymNum > 0) {
-        for (SymIndex = 0; SymIndex < SymNum; SymIndex++) {
-          UINT32   ExpIndex;
-          Sym = (Elf_Sym *)(Symtab + SymIndex * shdr->sh_entsize);
-          SymName = GetSymName(Sym);
-          if (SymName == NULL) {
-              continue;
+        for (ExpIndex = 0; ExpIndex < mExportSymNum; ExpIndex++) {
+          if (strcmp((CHAR8*)SymName, mExportSymName[ExpIndex]) != 0) {
+            continue;
           }
-
-          for (ExpIndex = 0; ExpIndex < (mExportSymNum -1); ExpIndex++) {
-            if (strcmp((CHAR8*)SymName, mExportSymName[ExpIndex]) != 0) {
-              continue;
-            }
+          //
+          // For explicit mode, only update if RVA not yet set
+          // For PRM mode, skip the descriptor (last entry) as it's already set
+          //
+          if ((mExplicitExportMode && mExportRVA[ExpIndex] == 0) ||
+              (!mExplicitExportMode && ExpIndex < mExportSymNum - 1)) {
             mExportRVA[ExpIndex] = (UINT32)(Sym->st_value);
             mExportSize += 2 * EFI_IMAGE_EXPORT_ADDR_SIZE + EFI_IMAGE_EXPORT_ORDINAL_SIZE + strlen((CHAR8 *)SymName) + 1;
           }
@@ -1090,6 +1117,18 @@ ScanSections64 (
       }
 
       break;
+    }
+
+    //
+    // Verify all requested symbols were found (for explicit export mode)
+    //
+    if (mExplicitExportMode) {
+      for (ExpIndex = 0; ExpIndex < mExportSymNum; ExpIndex++) {
+        if (mExportRVA[ExpIndex] == 0) {
+          Error (NULL, 0, 3000, "Invalid", "Symbol '%s' not found in ELF file.", mExportSymName[ExpIndex]);
+          assert (FALSE);
+        }
+      }
     }
 
     mCoffOffset += mExportSize;
@@ -2464,4 +2503,3 @@ WriteExport64 (
   DataDir->Size = mExportSize;
 
 }
-
