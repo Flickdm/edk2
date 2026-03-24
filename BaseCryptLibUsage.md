@@ -271,3 +271,209 @@ Because EDK2 has distinct execution environments, BaseCryptLib is compiled separ
 - **X.509** — certificate chain handling
 - **PKCS#7** — signed data format for capsules and Secure Boot
 - **HMAC/HKDF** — keyed hashing and key derivation
+
+---
+
+## 12. Unused BaseCryptLib Functions
+
+Of the 186 functions declared in `CryptoPkg/Include/Library/BaseCryptLib.h`, approximately **69 (37%)** have no call sites outside of CryptoPkg itself. They are grouped below by crypto family.
+
+> **Note:** "Unused" means no EDK2 consumer module calls these functions. They may still be needed for platform-specific or out-of-tree consumers.
+
+### Entire Algorithm Families — Zero Usage in EDK2
+
+| Family | Unused Functions | Notes |
+|--------|-----------------|-------|
+| **MD5** | `Md5GetContextSize`, `Md5Init`, `Md5Update`, `Md5Final`, `Md5HashAll`, `Md5Duplicate` | Cryptographically broken; should not be used |
+| **Camellia** | `CamelliaGetContextSize`, `CamelliaEncrypt`, `CamelliaDecrypt` | No EDK2 consumer requires this cipher |
+| **DH (Diffie-Hellman)** | `DhNew`, `DhFree`, `DhGenerateParameter`, `DhSetParameter`, `DhGenerateKey`, `DhComputeKey` | Key exchange not used directly in EDK2 |
+
+### Partially Unused Families
+
+| Family | Unused Functions | Used Counterparts |
+|--------|----------------|-------------------|
+| **AES** | `AesGetContextSize`, `AesDecrypt`, `AesCbcEncrypt`, `AesCbcDecrypt` | AES-GCM and ECB modes are used |
+| **SHA-1** | `Sha1Duplicate`, `Sha1HashAll` | Streaming API (`Init`/`Update`/`Final`) is used |
+| **SHA-512** | `Sha512Duplicate`, `Sha512HashAll` | Streaming API is used |
+| **SM3** | `Sm3Duplicate`, `Sm3HashAll` | Streaming API is used |
+| **Hash Utilities** | `ParallelHash256HashAll` | — |
+| **RSA** | `RsaCheckKey`, `RsaGenerateKey`, `RsaOaepEncrypt`, `RsaOaepDecrypt`, `RsaPssSign`, `RsaPssVerify` | Basic PKCS#1 v1.5 (`RsaPkcs1Sign`, `RsaPkcs1Verify`) is used |
+| **Elliptic Curve** | `EcGroupInit`, `EcGroupGetCurve`, `EcGroupGetOrder`, `EcGetPubKey`, `EcPointEqual`, `EcPointInvert`, `EcPointIsAtInfinity`, `EcPointIsOnCurve`, `EcPointSetCompressedCoordinates` | High-level API (`EcDsaSign`, `EcDsaVerify`, `EcGenerateKey`) is used |
+| **BigNum** | `BigNumInit`, `BigNumCopy`, `BigNumBits`, `BigNumBytes`, `BigNumIsWord`, `BigNumIsOdd`, `BigNumSetUint`, `BigNumCmp`, `BigNumAdd`, `BigNumSub`, `BigNumMod`, `BigNumAddMod`, `BigNumSqrMod`, `BigNumDiv`, `BigNumRShift`, `BigNumToBin`, `BigNumConstTime`, `BigNumValueOne` | High-level ops (`ExpMod`, `InverseMod`, `MulMod`) are used |
+| **PKCS** | `Pkcs1v2Encrypt`, `Pkcs1v2Decrypt`, `Pkcs5HashPassword`, `Pkcs7Sign`, `Pkcs7GetCertificatesList` | Verification API (`Pkcs7Verify`, `Pkcs7GetSigners`) is used |
+| **X.509** | `X509ConstructCertificateStack`, `X509ConstructCertificateStackV`, `X509Free`, `X509StackFree` | Certificate verification API is used |
+| **Other** | `VerifyEKUsInPkcs7Signature` | — |
+
+### Key Insight
+
+EDK2 code predominantly uses the **streaming (incremental) API** pattern (`Init` → `Update` → `Final`) rather than one-shot digest helpers. This explains why many `*HashAll` and `*Duplicate` helpers are unused even when the underlying algorithm is actively used.
+
+---
+
+## 13. Code Paths Requiring PQC Migration (RSA / EC Usage)
+
+The following consumer code paths call RSA or EC functions from BaseCryptLib and will require updates when transitioning to Post-Quantum Cryptography (PQC) algorithms (e.g., ML-DSA / CRYSTALS-Dilithium for signatures, ML-KEM / CRYSTALS-Kyber for key encapsulation).
+
+### Priority Summary
+
+| Functional Area | Component | Crypto Used | Migration Priority |
+|---|---|---|---|
+| Secure Boot | Image Verification | RSA (Authenticode) | **Critical** |
+| Secure Boot | PKCS#7 Verify Driver | RSA/ECDSA | **Critical** |
+| Secure Boot | Authenticated Variables | RSA/ECDSA (via PKCS#7) | **Critical** |
+| Capsule Update | FmpAuthenticationLibRsa2048Sha256 | RSA-2048 PKCS#1 v1.5 | **Critical** |
+| Capsule Update | FmpAuthenticationLibPkcs7 | RSA/ECDSA (via PKCS#7) | **Critical** |
+| Capsule Update | Rsa2048Sha256GuidedSectionExtract (DXE + PEI) | RSA-2048 PKCS#1 v1.5 | **Critical** |
+| Device Security | SPDM CryptlibWrapper | RSA + ECDSA + X.509 | **High** |
+| TLS / Network | TlsDxe / TlsLib | RSA, ECDSA (in TLS handshake) | **High** |
+| TLS / Network | TlsAuthConfigDxe | RSA/EC (X.509 CA store) | **Medium** |
+| TEE | Intel TDX / AMD SEV measurement | RSA/EC (attestation) | **High** |
+| Secure Boot UI | SecureBootConfigDxe | RSA/EC (cert enrollment) | **Medium** |
+
+---
+
+### Detailed Findings
+
+#### 13.1 Secure Boot — Image Verification (`DxeImageVerificationLib`)
+
+**File:** `SecurityPkg/Library/DxeImageVerificationLib/DxeImageVerificationLib.c`
+
+| Function Called | Purpose |
+|---|---|
+| `AuthenticodeVerify()` | Verifies Authenticode (RSA) signature on PE/COFF images |
+| `ImageTimestampVerify()` | Validates RSA/EC timestamp countersignature |
+| `X509GetTBSCert()` | Parses X.509 TBS certificate data |
+
+This is the core Secure Boot enforcement path. Every image loaded during boot (drivers, OS loader) is verified here. RSA is embedded in Authenticode signatures; a PQC replacement (e.g., ML-DSA) must be supported.
+
+---
+
+#### 13.2 Secure Boot — PKCS#7 Verification Protocol (`Pkcs7VerifyDxe`)
+
+**File:** `SecurityPkg/Pkcs7Verify/Pkcs7VerifyDxe/Pkcs7VerifyDxe.c`
+
+| Function Called | Purpose |
+|---|---|
+| `Pkcs7Verify()` | Validates PKCS#7 SignedData (RSA/EC inside) |
+
+Exposes the UEFI PKCS#7 Verification Protocol consumed by other drivers. Needs to support PQC signers within PKCS#7 structures.
+
+---
+
+#### 13.3 Authenticated Variables (`AuthVariableLib`)
+
+**File:** `SecurityPkg/Library/AuthVariableLib/AuthService.c`
+
+| Function Called | Purpose |
+|---|---|
+| `Pkcs7Verify()` | Validates signatures on authenticated UEFI variables (PK, KEK, db, dbx) |
+
+Protects all authenticated UEFI variables. PQC migration here requires updating the authenticated variable format and the UEFI spec.
+
+---
+
+#### 13.4 Capsule Update — RSA-2048 SHA-256 Authentication
+
+**File:** `SecurityPkg/Library/FmpAuthenticationLibRsa2048Sha256/FmpAuthenticationLibRsa2048Sha256.c`
+
+| Function Called | Purpose |
+|---|---|
+| `RsaNew()` | Allocates RSA context |
+| `RsaSetKey()` | Sets RSA modulus (N) and public exponent (E) |
+| `RsaPkcs1Verify()` | Verifies RSA PKCS#1 v1.5 signature over SHA-256 digest |
+| `Sha256Init/Update/Final()` | Computes SHA-256 digest of capsule |
+
+Direct RSA-2048 hardcoded into the capsule authentication path. A new `FmpAuthenticationLibMlDsa` (or similar) library will be needed.
+
+---
+
+#### 13.5 Capsule Update — PKCS#7 Authentication
+
+**File:** `SecurityPkg/Library/FmpAuthenticationLibPkcs7/FmpAuthenticationLibPkcs7.c`
+
+| Function Called | Purpose |
+|---|---|
+| `Pkcs7Verify()` | RSA/EC verification within PKCS#7 signed capsule |
+
+PKCS#7 envelope approach; needs PQC signer support within the envelope.
+
+---
+
+#### 13.6 Guided Section Extraction (PEI + DXE)
+
+**Files:**
+- `SecurityPkg/Library/PeiRsa2048Sha256GuidedSectionExtractLib/PeiRsa2048Sha256GuidedSectionExtractLib.c`
+- `SecurityPkg/Library/DxeRsa2048Sha256GuidedSectionExtractLib/DxeRsa2048Sha256GuidedSectionExtractLib.c`
+
+| Function Called | Purpose |
+|---|---|
+| `RsaNew()`, `RsaSetKey()` | Construct RSA public key from embedded certificate |
+| `RsaPkcs1Verify()` | Verify RSA-2048 signature on signed firmware section |
+| `Sha256Init/Update/Final()` | Hash the section payload |
+
+Signed firmware sections are verified during image loading at both PEI and DXE phases. New PQC-based GUIDed section extractors will be required alongside the existing RSA ones.
+
+---
+
+#### 13.7 Device Security — SPDM (`CryptlibWrapper`)
+
+**File:** `SecurityPkg/DeviceSecurity/OsStub/CryptlibWrapper/CryptlibWrapper.c`
+
+**RSA calls:**
+
+| Function | Purpose |
+|---|---|
+| `RsaFree()` | Free RSA context |
+| `RsaPkcs1Sign()` (SHA-256/384/512) | Sign with RSA PKCS#1 v1.5 |
+| `RsaPkcs1Verify()` (SHA-256/384/512) | Verify RSA PKCS#1 v1.5 |
+| `RsaGetPrivateKeyFromPem()` | Load RSA private key |
+| `RsaGetPublicKeyFromX509()` | Extract RSA public key from certificate |
+
+**EC calls:**
+
+| Function | Purpose |
+|---|---|
+| `EcNewByNid()` | Create EC context (P-256/P-384/P-521) |
+| `EcFree()` | Free EC context |
+| `EcGenerateKey()` | Generate EC key pair |
+| `EcDhComputeKey()` | ECDH key exchange |
+| `EcDsaSign()` | ECDSA signing |
+| `EcDsaVerify()` | ECDSA verification |
+| `EcGetPrivateKeyFromPem()` | Load EC private key |
+| `EcGetPublicKeyFromX509()` | Extract EC public key from certificate |
+
+SPDM is used for mutual authentication between host and PCIe/CXL devices. PQC migration must update algorithm negotiation, certificate handling, and session key establishment.
+
+---
+
+#### 13.8 TLS / Network (`TlsDxe` / `TlsLib`)
+
+**Files:** `NetworkPkg/TlsDxe/TlsImpl.c`, `CryptoPkg/Library/TlsLib/TlsLib.c`
+
+RSA and ECDSA are used implicitly via the underlying TLS library (OpenSSL or MbedTLS) for:
+- Server and client certificate verification
+- TLS handshake signing
+- Session key establishment
+
+PQC migration here depends on the underlying TLS library adding PQC cipher suite support (per IETF drafts for TLS 1.3 + PQC).
+
+---
+
+#### 13.9 Secure Boot Configuration UI (`SecureBootConfigDxe`)
+
+**File:** `SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfigImpl.c`
+
+Manages Secure Boot variables (db, dbx, KEK, PK) and validates certificates during manual enrollment. Will need to support PQC certificate formats in the configuration UI.
+
+---
+
+### Migration Strategy Recommendations
+
+1. **Dual-Algorithm Support:** Ship PQC libraries (e.g., `FmpAuthenticationLibMlDsa`) in parallel with legacy RSA libraries; select via DSC.
+2. **Hybrid Signatures:** During the transition period, require both RSA and PQC signatures (hybrid mode) on capsules, images, and certificates.
+3. **Phased Rollout:**
+   - Phase 1: Add PQC verification support alongside RSA
+   - Phase 2: Require hybrid (RSA + PQC) signatures
+   - Phase 3: Deprecate RSA-only paths
+4. **Protocol / Format Updates:** FMP capsule headers, Authenticode structures, SPDM negotiation, and UEFI authenticated variable format all need to accommodate larger PQC signature sizes (ML-DSA signatures are ~2–3 KB vs. ~256 bytes for RSA-2048).
+5. **Library Abstraction:** Introduce a new `BasePqcLib` or extend `BaseCryptLib` with PQC algorithm families (`MlDsa`, `MlKem`, `SlhDsa`).
